@@ -27,18 +27,17 @@ SECRET_KEY = "12345"
 session = requests.Session()
 
 # ================= LOAD =================
-try:
-    print("[INFO] Loading model...")
-    model = load_model(MODEL_PATH)
+print("[INFO] MODEL_PATH:", MODEL_PATH)
+print("[INFO] SCALER_PATH:", SCALER_PATH)
 
-    print("[INFO] Loading scaler...")
-    scaler = joblib.load(SCALER_PATH)
+print("[INFO] Model exists:", os.path.exists(MODEL_PATH))
+print("[INFO] Scaler exists:", os.path.exists(SCALER_PATH))
 
-    print("[INFO] Model & Scaler Loaded")
+print("[INFO] Loading model...")
+model = load_model(MODEL_PATH)
 
-except Exception as e:
-    print("[FATAL ERROR]", e)
-    raise e
+print("[INFO] Loading scaler...")
+scaler = joblib.load(SCALER_PATH)
 
 # ================= STATE =================
 last_pump_on_time = 0
