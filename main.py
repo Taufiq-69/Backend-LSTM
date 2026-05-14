@@ -7,6 +7,7 @@ from tensorflow.keras.models import load_model
 from datetime import datetime
 import os
 
+print("[INFO] Backend starting...")
 app = Flask(__name__)
 
 # ================= CONFIG =================
@@ -26,9 +27,18 @@ SECRET_KEY = "12345"
 session = requests.Session()
 
 # ================= LOAD =================
-model  = load_model(MODEL_PATH)
-scaler = joblib.load(SCALER_PATH)
-print("[INFO] Model & Scaler Loaded")
+try:
+    print("[INFO] Loading model...")
+    model = load_model(MODEL_PATH)
+
+    print("[INFO] Loading scaler...")
+    scaler = joblib.load(SCALER_PATH)
+
+    print("[INFO] Model & Scaler Loaded")
+
+except Exception as e:
+    print("[FATAL ERROR]", e)
+    raise e
 
 # ================= STATE =================
 last_pump_on_time = 0
