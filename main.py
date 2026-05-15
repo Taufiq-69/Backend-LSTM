@@ -6,12 +6,10 @@ import joblib
 from datetime import datetime
 import os
 
-# ================= PERFORMANCE =================
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
 os.environ["TF_NUM_INTEROP_THREADS"] = "1"
-
 print("[INFO] Backend starting...")
 
 app = Flask(__name__)
@@ -30,14 +28,10 @@ TIMEOUT = 10
 
 SECRET_KEY = "12345"
 
-# ===== INTERVAL PREDICT =====
-PREDICT_INTERVAL = 240
-LAST_PREDICT = 0
-
 # ================= SESSION =================
 session = requests.Session()
 
-# ================= DEBUG =================
+# ================= DEBUG FILE =================
 print("[INFO] MODEL_PATH :", MODEL_PATH)
 print("[INFO] SCALER_PATH:", SCALER_PATH)
 
@@ -53,12 +47,12 @@ try:
     model = load_model(MODEL_PATH)
 
     print("[INFO] Loading scaler...")
-    scaler = joblib.load(SCALER_PATH)
-
+    scaler = joblib.load(SCALER_PATH
+                        
     print("[INFO] Warming up model...")
     dummy_input = np.zeros((1, WINDOW, 6), dtype=np.float32)
     model.predict(dummy_input, verbose=0)
-
+    
     print("[INFO] Model & Scaler loaded successfully")
 
 except Exception as e:
@@ -100,19 +94,18 @@ def load_window():
     try:
         data = fb_get("lstm/window")
 
-        # ===== Firebase array bisa jadi dict =====
+        # ===== Firebase kadang simpan array jadi dict =====
         if isinstance(data, dict):
             data = list(data.values())
 
         if isinstance(data, list):
 
+            # ===== Validasi item =====
             clean_data = []
 
             for item in data:
-
                 if isinstance(item, dict):
-
-                    required_keys = [
+                    if all(k in item for k in [
                         "soil",
                         "temp",
                         "hum",
@@ -120,13 +113,13 @@ def load_window():
                         "time_sin",
                         "time_cos",
                         "ts"
-                    ]
-
-                    if all(k in item for k in required_keys):
+                    ]):
                         clean_data.append(item)
 
+            # ===== Sort berdasarkan timestamp =====
             clean_data.sort(key=lambda x: x["ts"])
 
+            # ===== Ambil maksimal WINDOW terakhir =====
             clean_data = clean_data[-WINDOW:]
 
             print(f"[INFO] Loaded window: {len(clean_data)} data")
@@ -173,7 +166,6 @@ def update_pump_state():
 
 
 def get_pump_feature():
-
     if (time.time() - last_pump_on_time) <= PUMP_WINDOW:
         return 1
 
@@ -181,7 +173,6 @@ def get_pump_feature():
 
 # ================= SENSOR =================
 def get_sensor_data():
-
     sensor = fb_get("sensor")
 
     if not sensor:
@@ -200,7 +191,6 @@ def get_sensor_data():
 
 # ================= FEATURE =================
 def build_feature():
-
     sensor = get_sensor_data()
 
     if not sensor:
@@ -230,24 +220,34 @@ def build_feature():
 # ================= PREDICT =================
 def predict(sequence_data):
 
+    print("[DEBUG] sequence_data len:", len(sequence_data))
+
     input_data = np.array(sequence_data, dtype=np.float32)
 
     print("[DEBUG] input_data shape:", input_data.shape)
 
+    # ===== VALIDASI SHAPE =====
     if input_data.shape != (WINDOW, 6):
         raise ValueError(
-            f"Invalid shape {input_data.shape}"
+            f"Invalid input shape {input_data.shape}, expected {(WINDOW, 6)}"
         )
 
+    # ===== SCALE =====
     input_scaled = scaler.transform(input_data)
 
+    print("[DEBUG] input_scaled shape:", input_scaled.shape)
+
+    # ===== RESHAPE LSTM =====
     input_scaled = input_scaled.reshape(1, WINDOW, 6)
 
-    pred_scaled = model.predict(
-        input_scaled,
-        verbose=0
-    )[0][0]
+    print("[DEBUG] reshape:", input_scaled.shape)
 
+    # ===== PREDICT =====
+    pred_scaled = model.predict(input_scaled, verbose=0)[0][0]
+
+    print("[DEBUG] pred_scaled:", pred_scaled)
+
+    # ===== INVERSE SCALE =====
     dummy = np.zeros((1, 6))
 
     dummy[0, 0] = pred_scaled
@@ -255,6 +255,8 @@ def predict(sequence_data):
     real_pred = scaler.inverse_transform(dummy)[0][0]
 
     real_pred = float(np.clip(real_pred, 0, 100))
+
+    print("[DEBUG] real_pred:", real_pred)
 
     return real_pred
 
@@ -281,21 +283,11 @@ def home():
         "status": "LSTM backend running"
     })
 
-# ===== KEEP ALIVE =====
-@app.route("/ping")
-def ping():
 
-    return jsonify({
-        "status": "alive",
-        "time": str(datetime.now())
-    })
-
-# ================= RUN =================
 @app.route("/run", methods=["GET"])
 def run():
 
     global sequence
-    global LAST_PREDICT
 
     # ===== AUTH =====
     key = request.args.get("key")
@@ -311,24 +303,6 @@ def run():
     print("==============================")
 
     try:
-
-        # ===== KEEP ALIVE =====
-        now = time.time()
-
-        if now - LAST_PREDICT < PREDICT_INTERVAL:
-
-            remain = int(
-                PREDICT_INTERVAL - (now - LAST_PREDICT)
-            )
-
-            print(f"[INFO] Skip predict ({remain}s remaining)")
-
-            return jsonify({
-                "status": "skip",
-                "remaining": remain
-            })
-
-        LAST_PREDICT = now
 
         # ===== UPDATE PUMP =====
         update_pump_state()
@@ -349,7 +323,7 @@ def run():
 
         print("[DEBUG] Current window:", len(sequence))
 
-        # ===== WARMUP WINDOW =====
+        # ===== WARMUP =====
         if len(sequence) < WINDOW:
 
             return jsonify({
@@ -373,10 +347,12 @@ def run():
 
         print("[DEBUG] seq_array shape:", np.array(seq_array).shape)
 
+        print("[DEBUG] first data:", seq_array[0])
+
+        print("[DEBUG] last data:", seq_array[-1])
+
         # ===== PREDICT =====
         pred = predict(seq_array)
-
-        print("[INFO] Prediction:", pred)
 
         # ===== SEND =====
         send_prediction(pred)
