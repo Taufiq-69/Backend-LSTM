@@ -6,6 +6,10 @@ import joblib
 from datetime import datetime
 import os
 
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+os.environ["TF_NUM_INTEROP_THREADS"] = "1"
 print("[INFO] Backend starting...")
 
 app = Flask(__name__)
@@ -44,6 +48,10 @@ try:
 
     print("[INFO] Loading scaler...")
     scaler = joblib.load(SCALER_PATH)
+    
+    print("[INFO] Warming up model...")
+    dummy_input = np.zeros((1, WINDOW, 6), dtype=np.float32)
+    model.predict(dummy_input, verbose=0)
 
     print("[INFO] Model & Scaler loaded successfully")
 
