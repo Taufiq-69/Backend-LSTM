@@ -15,7 +15,7 @@ FIREBASE_URL = "https://smart-agriculture-berbasis-ai-default-rtdb.asia-southeas
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-MODEL_PATH = os.path.join(BASE_DIR, "lstm_soil_model.keras")
+MODEL_PATH = os.path.join(BASE_DIR, "lstm_soil_model.h5")
 SCALER_PATH = os.path.join(BASE_DIR, "scaler.save")
 
 WINDOW = 20
