@@ -59,6 +59,7 @@ sequence = []
 def fb_get(path):
     try:
         url = f"{FIREBASE_URL}/{path}.json"
+
         res = session.get(url, timeout=TIMEOUT)
 
         if res.status_code == 200:
@@ -74,6 +75,7 @@ def fb_get(path):
 def fb_set(path, data):
     try:
         url = f"{FIREBASE_URL}/{path}.json"
+
         session.put(url, json=data, timeout=TIMEOUT)
 
     except Exception as e:
@@ -81,18 +83,52 @@ def fb_set(path, data):
 
 # ================= WINDOW =================
 def load_window():
-    data = fb_get("lstm/window")
+    try:
+        data = fb_get("lstm/window")
 
-    if isinstance(data, list):
-        data.sort(key=lambda x: x["ts"])
-        return data
+        # ===== Firebase kadang simpan array jadi dict =====
+        if isinstance(data, dict):
+            data = list(data.values())
 
-    return []
+        if isinstance(data, list):
+
+            # ===== Validasi item =====
+            clean_data = []
+
+            for item in data:
+                if isinstance(item, dict):
+                    if all(k in item for k in [
+                        "soil",
+                        "temp",
+                        "hum",
+                        "pump",
+                        "time_sin",
+                        "time_cos",
+                        "ts"
+                    ]):
+                        clean_data.append(item)
+
+            # ===== Sort berdasarkan timestamp =====
+            clean_data.sort(key=lambda x: x["ts"])
+
+            # ===== Ambil maksimal WINDOW terakhir =====
+            clean_data = clean_data[-WINDOW:]
+
+            print(f"[INFO] Loaded window: {len(clean_data)} data")
+
+            return clean_data
+
+        return []
+
+    except Exception as e:
+        print("[ERROR] load_window:", e)
+        return []
 
 
 def save_window(window):
     try:
         url = f"{FIREBASE_URL}/lstm/window.json"
+
         session.put(url, json=window, timeout=TIMEOUT)
 
     except Exception as e:
@@ -135,13 +171,14 @@ def get_sensor_data():
         return None
 
     try:
-        return (
-            float(sensor.get("soil", 0)),
-            float(sensor.get("temperature", 0)),
-            float(sensor.get("humidity", 0))
-        )
+        soil = float(sensor.get("soil", 0))
+        temp = float(sensor.get("temperature", 0))
+        hum = float(sensor.get("humidity", 0))
 
-    except:
+        return soil, temp, hum
+
+    except Exception as e:
+        print("[ERROR] sensor parse:", e)
         return None
 
 # ================= FEATURE =================
@@ -152,9 +189,11 @@ def build_feature():
         return None
 
     soil, temp, hum = sensor
+
     pump = get_pump_feature()
 
     now = datetime.now()
+
     minute_of_day = now.hour * 60 + now.minute
 
     time_sin = np.sin(2 * np.pi * minute_of_day / 1440)
@@ -165,29 +204,57 @@ def build_feature():
         "temp": temp,
         "hum": hum,
         "pump": pump,
-        "time_sin": time_sin,
-        "time_cos": time_cos,
+        "time_sin": float(time_sin),
+        "time_cos": float(time_cos),
         "ts": int(time.time())
     }
 
 # ================= PREDICT =================
 def predict(sequence_data):
-    input_data = np.array(sequence_data)
 
+    print("[DEBUG] sequence_data len:", len(sequence_data))
+
+    input_data = np.array(sequence_data, dtype=np.float32)
+
+    print("[DEBUG] input_data shape:", input_data.shape)
+
+    # ===== VALIDASI SHAPE =====
+    if input_data.shape != (WINDOW, 6):
+        raise ValueError(
+            f"Invalid input shape {input_data.shape}, expected {(WINDOW, 6)}"
+        )
+
+    # ===== SCALE =====
     input_scaled = scaler.transform(input_data)
+
+    print("[DEBUG] input_scaled shape:", input_scaled.shape)
+
+    # ===== RESHAPE LSTM =====
     input_scaled = input_scaled.reshape(1, WINDOW, 6)
 
+    print("[DEBUG] reshape:", input_scaled.shape)
+
+    # ===== PREDICT =====
     pred_scaled = model.predict(input_scaled, verbose=0)[0][0]
 
+    print("[DEBUG] pred_scaled:", pred_scaled)
+
+    # ===== INVERSE SCALE =====
     dummy = np.zeros((1, 6))
+
     dummy[0, 0] = pred_scaled
 
     real_pred = scaler.inverse_transform(dummy)[0][0]
 
-    return float(np.clip(real_pred, 0, 100))
+    real_pred = float(np.clip(real_pred, 0, 100))
+
+    print("[DEBUG] real_pred:", real_pred)
+
+    return real_pred
 
 # ================= SEND =================
 def send_prediction(pred):
+
     payload = {
         "prediction": pred,
         "timestamp": int(time.time())
@@ -203,6 +270,7 @@ print(f"[INIT] window size: {len(sequence)}")
 # ================= ROUTE =================
 @app.route("/")
 def home():
+
     return jsonify({
         "status": "LSTM backend running"
     })
@@ -210,50 +278,78 @@ def home():
 
 @app.route("/run", methods=["GET"])
 def run():
+
     global sequence
 
+    # ===== AUTH =====
     key = request.args.get("key")
 
     if key != SECRET_KEY:
+
         return jsonify({
             "status": "unauthorized"
         })
 
-    print("\n[CRON] Triggered", datetime.now())
+    print("\n==============================")
+    print("[CRON] Triggered:", datetime.now())
+    print("==============================")
 
     try:
+
+        # ===== UPDATE PUMP =====
         update_pump_state()
 
+        # ===== BUILD FEATURE =====
         data = build_feature()
 
         if not data:
+
             return jsonify({
                 "status": "no_data"
             })
 
+        print("[DEBUG] New data:", data)
+
+        # ===== UPDATE WINDOW =====
         sequence = update_window(data)
 
+        print("[DEBUG] Current window:", len(sequence))
+
+        # ===== WARMUP =====
         if len(sequence) < WINDOW:
+
             return jsonify({
                 "status": "warming_up",
                 "buffer": len(sequence)
             })
 
+        # ===== BUILD ARRAY =====
         seq_array = []
 
         for d in sequence:
+
             seq_array.append([
-                d["soil"],
-                d["temp"],
-                d["hum"],
-                d["pump"],
-                d["time_sin"],
-                d["time_cos"]
+                float(d["soil"]),
+                float(d["temp"]),
+                float(d["hum"]),
+                float(d["pump"]),
+                float(d["time_sin"]),
+                float(d["time_cos"])
             ])
 
+        print("[DEBUG] seq_array shape:", np.array(seq_array).shape)
+
+        print("[DEBUG] first data:", seq_array[0])
+
+        print("[DEBUG] last data:", seq_array[-1])
+
+        # ===== PREDICT =====
         pred = predict(seq_array)
 
+        # ===== SEND =====
         send_prediction(pred)
+
+        print("[SUCCESS] Prediction sent")
 
         return jsonify({
             "status": "success",
@@ -261,6 +357,7 @@ def run():
         })
 
     except Exception as e:
+
         print("[ERROR]", str(e))
 
         return jsonify({
@@ -270,6 +367,7 @@ def run():
 
 # ================= RUN =================
 if __name__ == "__main__":
+
     port = int(os.environ.get("PORT", 5000))
 
     print(f"[INFO] Running on port {port}")
